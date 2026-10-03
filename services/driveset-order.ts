@@ -15,7 +15,7 @@ const MAX_SERVICE_ROWS = 7;
 const DRIVESET_PHONE = "+7 901 344-77-33";
 
 const COORDINATES = {
-  orderNumber: { x: 48, y: 645, width: 160, size: 10 },
+  orderNumber: { x: 54, y: 645, width: 154, size: 10 },
   date: { x: 60, y: 625, width: 148, size: 9 },
   // Изображение вписывается по высоте (оно шире бокса), поэтому крупнее его делает высота: 116 → 137 pt (+18%),
   // с центром на прежней высоте. Низ бокса (570.5) выше блока «ДАННЫЕ АВТОМОБИЛЯ», верх (707.5) ниже шапки; по x не менялся.
@@ -24,6 +24,9 @@ const COORDINATES = {
   makeModel: { x: 41, y: 525.5, width: 135, size: 8.5 },
   year: { x: 192, y: 525.5, width: 84, size: 8.5 },
   mileage: { x: 310, y: 525.5, width: 136, size: 8.5 },
+  // Иконка телефона: ось x как у иконок геометки (351) и Telegram (346–357, центр 351.5), центр по высоте = базовая
+  // линия строки + 3 pt, как у существующих иконок; размер ≈ Telegram-иконки (11 × 12 pt), золото, линия 1.1 pt.
+  phoneIcon: { centerX: 351.5, centerY: 742.6, scale: 0.55, strokeWidth: 1.1 },
   // Третья строка контактов шапки: тот же x и кегль, что у адреса и @driveset, шаг строк 23 pt.
   phone: { x: 364, y: 739.9, width: 192, size: 9.5 },
   serviceRows: [
@@ -35,9 +38,11 @@ const COORDINATES = {
     295.5,
     262.5,
   ],
-  serviceNumber: { x: 29, width: 43, size: 8 },
+  // Колонка «№» — от x=29 до линии x=73: номера услуг по центру колонки.
+  serviceNumber: { center: 51, width: 43, size: 8 },
   serviceName: { x: 82, width: 365, size: 8.5 },
-  serviceCost: { x: 457, width: 94, size: 8.5 },
+  // Цены и «В подарок» — по правому краю колонки «СТОИМОСТЬ» (как заголовок, x=551), колонка начинается с x=456.
+  serviceCost: { right: 551, width: 90, size: 8.5 },
   paidWorksCost: { right: 550, y: 213, size: 9 },
   // «Скидка» уже в шаблоне; шаблонное «(%)» (x 82–95) закрывается белым и вместо него печатается «15%».
   discountPercent: { x: 84, y: 191, width: 60, size: 10 },
@@ -165,6 +170,54 @@ function drawTextRight(
   });
 }
 
+/** Текст по центру `center` (pt). */
+function drawTextCentered(
+  page: PDFPage,
+  text: string,
+  font: PDFFont,
+  options: { center: number; y: number; width: number; size: number; minSize?: number },
+): void {
+  let size = options.size;
+  const minSize = options.minSize ?? 5;
+  while (size > minSize && font.widthOfTextAtSize(text, size) > options.width) size -= 0.2;
+  page.drawText(text, {
+    x: options.center - font.widthOfTextAtSize(text, size) / 2,
+    y: options.y,
+    size,
+    font,
+    color: rgb(0.08, 0.08, 0.08),
+  });
+}
+
+/** Текст по правому краю `right`; слишком длинное значение уменьшается, чтобы не выйти за `width`. */
+function drawTextRightFit(
+  page: PDFPage,
+  text: string,
+  font: PDFFont,
+  options: { right: number; y: number; width: number; size: number; minSize?: number },
+): void {
+  let size = options.size;
+  const minSize = options.minSize ?? 5;
+  while (size > minSize && font.widthOfTextAtSize(text, size) > options.width) size -= 0.2;
+  drawTextRight(page, text, font, { right: options.right, y: options.y, size });
+}
+
+// Контур трубки (Feather «phone», MIT), viewBox 24 × 24: тонкая золотая линия, как у иконок шаблона.
+const PHONE_ICON_PATH =
+  "M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z";
+
+function drawPhoneIcon(page: PDFPage): void {
+  const icon = COORDINATES.phoneIcon;
+  // Начало SVG-координат (0,0) — верхний левый угол viewBox; центр иконки — (12,12).
+  page.drawSvgPath(PHONE_ICON_PATH, {
+    x: icon.centerX - 12 * icon.scale,
+    y: icon.centerY + 12 * icon.scale,
+    scale: icon.scale,
+    borderColor: rgb(0.784314, 0.529412, 0.086275), // цвет иконок шаблона
+    borderWidth: icon.strokeWidth / icon.scale, // pdf-lib масштабирует и толщину линии: на странице выходит 1.1 pt
+  });
+}
+
 async function drawCarImage(page: PDFPage, pdf: PDFDocument, imageBytes: Uint8Array): Promise<void> {
   const pngBytes = await sharp(Buffer.from(imageBytes)).rotate().png().toBuffer();
   const image = await pdf.embedPng(pngBytes);
@@ -218,6 +271,7 @@ export async function generateDriveSetOrderPdf(data: DriveSetOrderData): Promise
 
   drawTextFit(page, data.orderNumber.trim(), boldFont, COORDINATES.orderNumber);
   drawTextFit(page, formatDate(data.date), regularFont, COORDINATES.date);
+  drawPhoneIcon(page);
   drawTextFit(page, DRIVESET_PHONE, regularFont, COORDINATES.phone);
   await drawCarImage(page, pdf, data.carImage);
   drawTextFit(page, data.makeModel.trim(), boldFont, COORDINATES.makeModel);
@@ -226,9 +280,9 @@ export async function generateDriveSetOrderPdf(data: DriveSetOrderData): Promise
 
   data.services.forEach((service, index) => {
     const y = COORDINATES.serviceRows[index];
-    drawTextFit(page, String(index + 1), regularFont, { ...COORDINATES.serviceNumber, y });
+    drawTextCentered(page, String(index + 1), regularFont, { ...COORDINATES.serviceNumber, y });
     drawTextFit(page, service.name.trim(), regularFont, { ...COORDINATES.serviceName, y });
-    drawTextFit(
+    drawTextRightFit(
       page,
       service.gift ? "В подарок" : formatAmount(service.price ?? 0),
       service.gift ? boldFont : regularFont,
