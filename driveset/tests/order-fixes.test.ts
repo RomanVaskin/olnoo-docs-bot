@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import fontkit from "@pdf-lib/fontkit";
+import { PDFDocument } from "pdf-lib";
 import sharp from "sharp";
 
 import { generateDriveSetOrderPdf, DRIVESET_ORDER_COORDINATES } from "../../services/driveset-order.js";
@@ -116,7 +118,8 @@ test("PDF: введённый номер печатается как есть, �
   assert.match(text, /№\s+114\b/);
   assert.ok(!text.includes("DS-"), "автоматический номер не печатается");
   assert.ok(text.includes("Москва, улица Наташи Ковшовой, 4с2"));
-  assert.ok(text.includes("+7 985 125-75-85"));
+  assert.ok(text.includes("+7 901 344-77-33"));
+  assert.ok(!text.includes("985 125-75-85"), "старый телефон не печатается");
   assert.ok(text.includes("@driveset"));
   assert.ok(text.includes("301 750 ₽"));
 });
@@ -173,8 +176,8 @@ test("PDF: марка, год и пробег стоят выше линий п�
   }
   const label = word("Марка");
   assert.ok(word("Audi").yMin > label.yMax, "значение не налезает на подпись поля");
+  assert.equal(DRIVESET_ORDER_COORDINATES.carImage.x, 283);
   assert.equal(DRIVESET_ORDER_COORDINATES.carImage.width, 282);
-  assert.equal(DRIVESET_ORDER_COORDINATES.carImage.height, 116, "область автомобиля не менялась");
 });
 
 test("БД получает display_number: миграция идемпотентна, внутренний номер сохраняется", () => {
@@ -194,4 +197,46 @@ test("БД получает display_number: миграция идемпотен�
   assert.equal(doc.displayNumber, "114");
   assert.equal(doc.orderNumber, "DS-2026-0001");
   second.close();
+});
+
+test("автомобиль крупнее на 15–20%, пропорции сохранены, ничего не перекрывает", async () => {
+  const box = DRIVESET_ORDER_COORDINATES.carImage;
+  const OLD_HEIGHT = 116;
+  const growth = box.height / OLD_HEIGHT - 1;
+  assert.ok(growth >= 0.15 && growth <= 0.2, `рост ${(growth * 100).toFixed(1)}%`);
+  // Для типичного кадра 3:2 вписывание идёт по высоте, значит и размер растёт на тот же процент без деформации.
+  const scale = Math.min(box.width / 1536, box.height / 1024);
+  assert.ok(Math.abs((1536 * scale) / (1024 * scale) - 1.5) < 1e-9, "пропорции 3:2 сохраняются");
+  assert.ok(1536 * scale <= box.width, "по ширине вписывается в бокс");
+  // Низ бокса выше блока «ДАННЫЕ АВТОМОБИЛЯ» / полей (метки до y≈548), верх ниже строк контактов шапки (≈735).
+  assert.ok(box.y >= 560, `низ бокса ${box.y}`);
+  assert.ok(box.y + box.height <= 725, `верх бокса ${box.y + box.height}`);
+  // Слева заголовок «ЗАКАЗ-НАРЯД» заканчивается на x≈250.6, справа поля страницы — на x=565.
+  assert.ok(box.x > 251 && box.x + box.width <= 565);
+});
+
+test("марка/модель и год — bold (DejaVu Sans Bold), пробег — regular", { skip: !HAS_PDFTOTEXT }, async () => {
+  const car = await sharp({ create: { width: 600, height: 300, channels: 3, background: "#fff" } }).png().toBuffer();
+  const bytes = await generateDriveSetOrderPdf({
+    orderNumber: "114", date: new Date("2026-10-03T12:00:00Z"), makeModel: "Geely Monjaro", year: 2022, mileage: "46 000 км",
+    carImage: car, services: [{ name: "Работы", price: 1000 }], discountPercent: 0,
+  });
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "driveset-bold-")), "order.pdf");
+  fs.writeFileSync(file, bytes);
+  const bbox = execFileSync("pdftotext", ["-bbox", file, "-"], { encoding: "utf8" });
+  const widthOf = (w: string) => {
+    const m = bbox.match(new RegExp(`xMin="([\\d.]+)" yMin="[\\d.]+" xMax="([\\d.]+)" yMax="[\\d.]+">${w}</word>`));
+    assert.ok(m, `слово ${w} не найдено`);
+    return Number(m[2]) - Number(m[1]);
+  };
+  const pdf = await PDFDocument.create();
+  pdf.registerFontkit(fontkit);
+  const regular = await pdf.embedFont(fs.readFileSync("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"));
+  const bold = await pdf.embedFont(fs.readFileSync("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"));
+  const size = DRIVESET_ORDER_COORDINATES.makeModel.size;
+  for (const [word, font, other] of [["Geely", bold, regular], ["Monjaro", bold, regular], ["2022", bold, regular], ["км", regular, bold]] as const) {
+    const measured = widthOf(word);
+    assert.ok(Math.abs(measured - font.widthOfTextAtSize(word, size)) < 0.35, `${word}: ожидалась ширина ${font.widthOfTextAtSize(word, size).toFixed(2)}, получено ${measured.toFixed(2)}`);
+    assert.ok(Math.abs(measured - other.widthOfTextAtSize(word, size)) > 0.4, `${word}: ширина не должна совпадать с другим начертанием`);
+  }
 });

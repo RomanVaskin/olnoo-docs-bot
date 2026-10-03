@@ -12,12 +12,14 @@ const BOLD_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
 
 const MAX_SERVICE_ROWS = 7;
 
-const DRIVESET_PHONE = "+7 985 125-75-85";
+const DRIVESET_PHONE = "+7 901 344-77-33";
 
 const COORDINATES = {
   orderNumber: { x: 48, y: 645, width: 160, size: 10 },
   date: { x: 60, y: 625, width: 148, size: 9 },
-  carImage: { x: 283, y: 581, width: 282, height: 116 },
+  // Изображение вписывается по высоте (оно шире бокса), поэтому крупнее его делает высота: 116 → 137 pt (+18%),
+  // с центром на прежней высоте. Низ бокса (570.5) выше блока «ДАННЫЕ АВТОМОБИЛЯ», верх (707.5) ниже шапки; по x не менялся.
+  carImage: { x: 283, y: 570.5, width: 282, height: 137 },
   // Значения подняты над линиями полей (линия на y≈520.5), подписи и линии шаблона не двигаются.
   makeModel: { x: 41, y: 525.5, width: 135, size: 8.5 },
   year: { x: 192, y: 525.5, width: 84, size: 8.5 },
@@ -218,8 +220,8 @@ export async function generateDriveSetOrderPdf(data: DriveSetOrderData): Promise
   drawTextFit(page, formatDate(data.date), regularFont, COORDINATES.date);
   drawTextFit(page, DRIVESET_PHONE, regularFont, COORDINATES.phone);
   await drawCarImage(page, pdf, data.carImage);
-  drawTextFit(page, data.makeModel.trim(), regularFont, COORDINATES.makeModel);
-  drawTextFit(page, String(data.year).trim(), regularFont, COORDINATES.year);
+  drawTextFit(page, data.makeModel.trim(), boldFont, COORDINATES.makeModel);
+  drawTextFit(page, String(data.year).trim(), boldFont, COORDINATES.year);
   drawTextFit(page, String(data.mileage).trim(), regularFont, COORDINATES.mileage);
 
   data.services.forEach((service, index) => {
