@@ -1,0 +1,34 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies / build
+node_modules/
+dist/
+.next/
+
+# Runtime databases
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Generated documents
+exports/
+
+# Generated/car image cache
+data/driveset/cars/
+
+# Logs / temp
+*.log
+.DS_Store
+
+# Local backups
+*.backup
+
+# Local temp files
+*.bak
+*.tscd

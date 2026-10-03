@@ -1,0 +1,19 @@
+[Unit]
+Description=DriveSet Docs Telegram Bot
+Wants=network-online.target
+After=network-online.target olnoo-ai-router.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/olnoo/projects/olnoo-docs-bot
+EnvironmentFile=/opt/olnoo/projects/olnoo-docs-bot/.env
+EnvironmentFile=/opt/olnoo/secrets/router.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/npm run driveset
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
