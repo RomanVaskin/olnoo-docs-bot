@@ -100,6 +100,7 @@ async function enterGeelyOrder(
   await harness.text("/start");
   await harness.text("Создать документ");
   await harness.callback("ds:type:order");
+  await harness.text("114");
   await harness.text("Geely Monjaro");
   await harness.text("2022");
   await harness.text("65 000 км");
@@ -137,6 +138,14 @@ test("полный Telegram flow создаёт Geely Monjaro 2022, PDF и ис�
   const harness = createHarness(documents);
 
   await enterGeelyOrder(harness);
+  const asked = harness.calls
+    .filter(call => call.method === "sendMessage")
+    .map(call => String(call.payload.text ?? ""));
+  assert.ok(asked.includes("Введите номер заказ-наряда"), "первый вопрос — номер заказ-наряда");
+  assert.ok(
+    asked.indexOf("Введите номер заказ-наряда") < asked.indexOf("Введите марку и модель автомобиля:"),
+    "номер спрашивается до данных автомобиля",
+  );
   const preview = harness.calls
     .filter(call => call.method === "sendMessage")
     .map(call => String(call.payload.text ?? ""))
@@ -150,6 +159,7 @@ test("полный Telegram flow создаёт Geely Monjaro 2022, PDF и ис�
   const history = storage.listUserDocuments("1001");
   assert.equal(history.length, 1);
   assert.match(history[0].orderNumber, /^DS-\d{4}-0001$/);
+  assert.equal(history[0].displayNumber, "114", "номер, введённый пользователем, сохраняется как есть");
   assert.equal(history[0].makeModel, "Geely Monjaro");
   assert.equal(history[0].vehicleYear, 2022);
   assert.equal(history[0].totals.paidWorksCost, 355000);
@@ -172,6 +182,7 @@ test("полный Telegram flow создаёт Geely Monjaro 2022, PDF и ис�
   assert.equal(historyMessage, "Последние заказ-наряды:");
 
   const second = documents.reserve({
+    displayNumber: "115",
     makeModel: "  geely   monjaro ",
     vehicleYear: 2022,
     mileage: "70 000 км",
@@ -225,6 +236,7 @@ test("годовая нумерация независима по годам и 
       telegramChatId: "1",
       telegramUsername: null,
       telegramName: null,
+      displayNumber: "1",
       makeModel: "Geely Monjaro",
       vehicleYear: 2022,
       mileage: "1 км",

@@ -16,6 +16,12 @@ type RouterImageResponse = {
   mimeType?: unknown;
 };
 
+/**
+ * Part of the cache key: bump it when the prompt changes so images generated with an older prompt
+ * (e.g. with a gray studio background) are not reused. Old cache files are left untouched.
+ */
+export const CAR_IMAGE_CACHE_VERSION = "white-bg-v2";
+
 export class CarImageGenerationError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
@@ -48,7 +54,7 @@ export class DriveSetCarImageService {
   ) {}
 
   cacheKey(makeModel: string, year: number): string {
-    const normalized = `${makeModel.trim().toLocaleLowerCase("ru-RU").replace(/\s+/g, " ")}|${year}`;
+    const normalized = `${CAR_IMAGE_CACHE_VERSION}|${makeModel.trim().toLocaleLowerCase("ru-RU").replace(/\s+/g, " ")}|${year}`;
     const hash = crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 12);
     return `${safeSlug(makeModel)}-${year}-${hash}`;
   }
@@ -89,9 +95,10 @@ export class DriveSetCarImageService {
         },
         body: JSON.stringify({
           prompt: [
-            `Photorealistic premium studio automotive photograph of a ${makeModel}, model year ${year}.`,
-            "Front three-quarter view, entire vehicle visible, correct factory body proportions and details.",
-            "Clean light neutral background, soft professional detailing-studio lighting, no people, no text, no watermark, no added logo.",
+            `Photorealistic exact vehicle: ${makeModel}, model year ${year}, factory appearance.`,
+            "Front three-quarter view, entire vehicle visible.",
+            "Isolated vehicle on a pure white background (#FFFFFF).",
+            "No gray background, no studio background, no floor, no scenery, no text, no license plate, no people, no watermark, no logo.",
           ].join(" "),
           size: "1536x1024",
         }),
