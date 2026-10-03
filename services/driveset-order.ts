@@ -5,10 +5,19 @@ import fontkit from "@pdf-lib/fontkit";
 import { PDFDocument, PDFFont, PDFPage, rgb } from "pdf-lib";
 import sharp from "sharp";
 
-const TEMPLATE_PATH = path.join(process.cwd(), "templates", "driveset-order.pdf");
+// Шаблон с Montserrat (статический текст перенабран из DejaVu, подчёркивания под значениями убраны).
+// Прежний templates/driveset-order.pdf (DejaVu) остаётся в репозитории неиспользуемым.
+const TEMPLATE_PATH = path.join(process.cwd(), "templates", "driveset-order-montserrat.pdf");
 
-const REGULAR_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
-const BOLD_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
+// Montserrat (SIL OFL, кириллица) лежит в репозитории: в системе сервера его устанавливать не нужно.
+const FONT_DIR = path.join(process.cwd(), "assets", "fonts", "montserrat");
+const FONT_FILES = {
+  regular: "Montserrat_400Regular.ttf", // основной текст
+  medium: "Montserrat_500Medium.ttf", // цены и значения таблицы
+  semibold: "Montserrat_600SemiBold.ttf", // номер, марка/модель, год, пробег, акценты
+  extrabold: "Montserrat_800ExtraBold.ttf", // итоговая сумма
+} as const;
+type FontWeight = keyof typeof FONT_FILES;
 
 const MAX_SERVICE_ROWS = 7;
 
@@ -19,7 +28,9 @@ const COORDINATES = {
   date: { x: 60, y: 625, width: 148, size: 9 },
   // Изображение вписывается по высоте (оно шире бокса), поэтому крупнее его делает высота: 116 → 137 pt (+18%),
   // с центром на прежней высоте. Низ бокса (570.5) выше блока «ДАННЫЕ АВТОМОБИЛЯ», верх (707.5) ниже шапки; по x не менялся.
-  carImage: { x: 283, y: 570.5, width: 282, height: 137 },
+  // Было 137 pt → 162 pt (+18%) с тем же центром (639): снимок вписывается по высоте, пропорции не меняются.
+  // Низ бокса (558) выше блока «ДАННЫЕ АВТОМОБИЛЯ» (метки полей ≤ ≈544), верх (720) ниже строк контактов шапки.
+  carImage: { x: 283, y: 558, width: 282, height: 162 },
   // Значения подняты над линиями полей (линия на y≈520.5), подписи и линии шаблона не двигаются.
   makeModel: { x: 41, y: 525.5, width: 135, size: 8.5 },
   year: { x: 192, y: 525.5, width: 84, size: 8.5 },
@@ -41,12 +52,12 @@ const COORDINATES = {
   // Колонка «№» — от x=29 до линии x=73: номера услуг по центру колонки.
   serviceNumber: { center: 51, width: 43, size: 8 },
   serviceName: { x: 82, width: 365, size: 8.5 },
-  // Цены и «В подарок» — по правому краю колонки «СТОИМОСТЬ» (как заголовок, x=551), колонка начинается с x=456.
-  serviceCost: { right: 551, width: 90, size: 8.5 },
+  // Цены и «В подарок» — по правому краю колонки «СТОИМОСТЬ» (как заголовок шаблона, x≈553), колонка начинается с x=456.
+  serviceCost: { right: 553, width: 90, size: 8.5 },
   paidWorksCost: { right: 550, y: 213, size: 9 },
-  // «Скидка» уже в шаблоне; шаблонное «(%)» (x 82–95) закрывается белым и вместо него печатается «15%».
-  discountPercent: { x: 84, y: 191, width: 60, size: 10 },
-  discountPercentCover: { x: 81, y: 189, width: 17, height: 11 },
+  // «Скидка» (x=42, 10 pt) — в шаблоне; процент печатается сразу за ней (x считается по ширине слова), в одной строке.
+  discountPercent: { y: 191, width: 60, size: 10 },
+  discountLabel: { x: 42, size: 10 },
   discountAmount: { right: 550, y: 191, size: 9 },
   total: { right: 550, y: 147, size: 14 },
 } as const;
@@ -241,8 +252,7 @@ async function drawCarImage(page: PDFPage, pdf: PDFDocument, imageBytes: Uint8Ar
 export async function generateDriveSetOrderPdf(data: DriveSetOrderData): Promise<Uint8Array> {
   validateOrder(data);
   assertRequiredFile(TEMPLATE_PATH, "Мастер-шаблон DriveSet");
-  assertRequiredFile(REGULAR_FONT_PATH, "Шрифт DejaVu Sans");
-  assertRequiredFile(BOLD_FONT_PATH, "Шрифт DejaVu Sans Bold");
+  for (const file of Object.values(FONT_FILES)) assertRequiredFile(path.join(FONT_DIR, file), `Шрифт ${file}`);
 
   const templateBytes = fs.readFileSync(TEMPLATE_PATH);
   const template = await PDFDocument.load(templateBytes);
@@ -263,44 +273,48 @@ export async function generateDriveSetOrderPdf(data: DriveSetOrderData): Promise
   });
 
   pdf.registerFontkit(fontkit);
-  const [regularFont, boldFont] = await Promise.all([
-    pdf.embedFont(fs.readFileSync(REGULAR_FONT_PATH), { subset: true }),
-    pdf.embedFont(fs.readFileSync(BOLD_FONT_PATH), { subset: true }),
-  ]);
+  const entries = await Promise.all(
+    (Object.entries(FONT_FILES) as [FontWeight, string][]).map(
+      async ([weight, file]) =>
+        [weight, await pdf.embedFont(fs.readFileSync(path.join(FONT_DIR, file)), { subset: true })] as const,
+    ),
+  );
+  const font = Object.fromEntries(entries) as Record<FontWeight, PDFFont>;
   const totals = calculateDriveSetOrderTotals(data.services, data.discountPercent ?? 0);
 
-  drawTextFit(page, data.orderNumber.trim(), boldFont, COORDINATES.orderNumber);
-  drawTextFit(page, formatDate(data.date), regularFont, COORDINATES.date);
+  drawTextFit(page, data.orderNumber.trim(), font.semibold, COORDINATES.orderNumber);
+  drawTextFit(page, formatDate(data.date), font.regular, COORDINATES.date);
   drawPhoneIcon(page);
-  drawTextFit(page, DRIVESET_PHONE, regularFont, COORDINATES.phone);
+  drawTextFit(page, DRIVESET_PHONE, font.regular, COORDINATES.phone);
   await drawCarImage(page, pdf, data.carImage);
-  drawTextFit(page, data.makeModel.trim(), boldFont, COORDINATES.makeModel);
-  drawTextFit(page, String(data.year).trim(), boldFont, COORDINATES.year);
-  drawTextFit(page, String(data.mileage).trim(), regularFont, COORDINATES.mileage);
+  drawTextFit(page, data.makeModel.trim(), font.semibold, COORDINATES.makeModel);
+  drawTextFit(page, String(data.year).trim(), font.semibold, COORDINATES.year);
+  drawTextFit(page, String(data.mileage).trim(), font.semibold, COORDINATES.mileage);
 
   data.services.forEach((service, index) => {
     const y = COORDINATES.serviceRows[index];
-    drawTextCentered(page, String(index + 1), regularFont, { ...COORDINATES.serviceNumber, y });
-    drawTextFit(page, service.name.trim(), regularFont, { ...COORDINATES.serviceName, y });
+    drawTextCentered(page, String(index + 1), font.medium, { ...COORDINATES.serviceNumber, y });
+    drawTextFit(page, service.name.trim(), font.medium, { ...COORDINATES.serviceName, y });
     drawTextRightFit(
       page,
       service.gift ? "В подарок" : formatAmount(service.price ?? 0),
-      service.gift ? boldFont : regularFont,
+      service.gift ? font.semibold : font.medium,
       { ...COORDINATES.serviceCost, y },
     );
   });
 
-  drawTextRight(page, formatAmount(totals.paidWorksCost), boldFont, COORDINATES.paidWorksCost);
-  const cover = COORDINATES.discountPercentCover;
-  page.drawRectangle({ x: cover.x, y: cover.y, width: cover.width, height: cover.height, color: rgb(1, 1, 1) });
-  drawTextFit(page, `${totals.discountPercent}%`, regularFont, COORDINATES.discountPercent);
+  drawTextRight(page, formatAmount(totals.paidWorksCost), font.semibold, COORDINATES.paidWorksCost);
+  // «Скидка» напечатана в шаблоне; процент — сразу за словом, в одной строке с ним.
+  const label = COORDINATES.discountLabel;
+  const percentX = label.x + font.regular.widthOfTextAtSize("Скидка ", label.size);
+  drawTextFit(page, `${totals.discountPercent}%`, font.regular, { ...COORDINATES.discountPercent, x: percentX });
   drawTextRight(
     page,
     totals.discountAmount > 0 ? `− ${formatAmount(totals.discountAmount)}` : formatAmount(0),
-    boldFont,
+    font.semibold,
     COORDINATES.discountAmount,
   );
-  drawTextRight(page, formatAmount(totals.total), boldFont, COORDINATES.total);
+  drawTextRight(page, formatAmount(totals.total), font.extrabold, COORDINATES.total);
 
   // Старые просмотрщики и установленный в проекте Ghostscript надёжнее
   // обрабатывают классическую таблицу xref, чем object streams PDF 1.7.

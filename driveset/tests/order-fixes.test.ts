@@ -124,16 +124,18 @@ test("PDF: введённый номер печатается как есть, �
   assert.ok(text.includes("301 750 ₽"));
 });
 
-test("PDF: скидка 15% — «Скидка 15%» в одной строке, «(%)» закрыто, сумма справа", { skip: !HAS_PDFTOTEXT }, async () => {
+test("PDF: скидка 15% — «Скидка 15%» в одной строке, сумма справа, без «(%)»", { skip: !HAS_PDFTOTEXT }, async () => {
   const file = await renderPdf({ number: "114", discount: 15 });
   const text = pdfText(file);
-  assert.ok(text.includes("15%"));
   assert.ok(text.includes("− 53 250 ₽"));
+  assert.ok(!text.includes("(%)"), "«(%)» нет ни в шаблоне, ни в динамике");
+  const words = wordsOf(file);
+  const label = words.find(w => w.text === "Скидка")!;
+  const percent = words.find(w => w.text === "15%")!;
+  assert.ok(Math.abs(percent.yMin - label.yMin) < 1.5 && Math.abs(percent.yMax - label.yMax) < 1.5, "в одной строке со словом «Скидка»");
+  const gap = percent.xMin - label.xMax;
+  assert.ok(gap >= 2 && gap <= 8, `промежуток «Скидка» → процент ${gap.toFixed(1)} pt`);
   const raster = await rasterize(file);
-  // На месте шаблонного «(%)» (x 82–95) остаётся только новый «15%» — а не наложение двух надписей.
-  const percent = DRIVESET_ORDER_COORDINATES.discountPercent;
-  assert.ok(inkIn(raster, { x: percent.x, y: DISCOUNT_ROW.y, width: 24, height: DISCOUNT_ROW.height }) > 0.03, "«15%» напечатано рядом со словом «Скидка»");
-  assert.ok(inkIn(raster, { x: 106, y: DISCOUNT_ROW.y, width: 110, height: DISCOUNT_ROW.height }) < 0.005, "после процента строка пуста");
   assert.ok(inkIn(raster, { x: 480, y: DISCOUNT_ROW.y, width: 70, height: DISCOUNT_ROW.height }) > 0.03, "сумма скидки справа");
 });
 
@@ -142,40 +144,20 @@ test("PDF: скидка 0% — «Скидка 0%» и «0 ₽» без мину�
   const text = pdfText(file);
   assert.ok(!text.includes("−"), "−0 ₽ не выводится");
   assert.match(text, /(^|\s)0\s*₽/m, "выводится 0 ₽");
-  const raster = await rasterize(file);
-  const percent = DRIVESET_ORDER_COORDINATES.discountPercent;
-  assert.ok(inkIn(raster, { x: percent.x, y: DISCOUNT_ROW.y, width: 16, height: DISCOUNT_ROW.height }) > 0.03, "«0%» напечатано");
-  assert.ok(inkIn(raster, { x: 106, y: DISCOUNT_ROW.y, width: 110, height: DISCOUNT_ROW.height }) < 0.005, "после процента строка пуста");
+  assert.ok(!text.includes("(%)"));
+  const words = wordsOf(file);
+  const label = words.find(w => w.text === "Скидка")!;
+  const percent = words.find(w => w.text === "0%")!;
+  assert.ok(Math.abs(percent.yMin - label.yMin) < 1.5, "«0%» в одной строке со словом «Скидка»");
 });
 
-test("шаблонное «(%)» целиком закрыто белым прямоугольником под новым процентом", { skip: !HAS_PDFTOTEXT }, () => {
-  const bbox = execFileSync("pdftotext", ["-bbox", path.join(process.cwd(), "templates", "driveset-order.pdf"), "-"], { encoding: "utf8" });
-  const m = bbox.match(/xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">\(%\)<\/word>/);
-  assert.ok(m, "в шаблоне есть «(%)»");
-  const [xMin, yMin, xMax, yMax] = m.slice(1).map(Number);
-  const cover = DRIVESET_ORDER_COORDINATES.discountPercentCover;
-  const PAGE_HEIGHT = 841.8898;
-  assert.ok(cover.x <= xMin && cover.x + cover.width >= xMax, "по горизонтали");
-  assert.ok(cover.y <= PAGE_HEIGHT - yMax && cover.y + cover.height >= PAGE_HEIGHT - yMin, "по вертикали");
-  assert.ok(cover.x >= 80.7, "«Скидка» (до x=80.6) не закрывается");
-});
-
-test("PDF: марка, год и пробег стоят выше линий полей (подписи и линии не двигались)", { skip: !HAS_PDFTOTEXT }, async () => {
+test("PDF: марка, год и пробег — под своими подписями, без наложения на них", { skip: !HAS_PDFTOTEXT }, async () => {
   const file = await renderPdf({ number: "114", discount: 0 });
-  const bbox = execFileSync("pdftotext", ["-bbox", file, "-"], { encoding: "utf8" });
-  const word = (w: string) => {
-    const m = bbox.match(new RegExp(`yMin="([\\d.]+)" xMax="[\\d.]+" yMax="([\\d.]+)">${w}</word>`));
-    assert.ok(m, `слово ${w} не найдено`);
-    return { yMin: Number(m[1]), yMax: Number(m[2]) };
-  };
-  const PAGE_HEIGHT = 841.8898;
-  const lineTop = PAGE_HEIGHT - 520.5; // линия поля Марка/Год/Пробег в координатах «сверху»
-  for (const w of ["Audi", "2019", "200000"]) {
-    const { yMax } = word(w);
-    assert.ok(lineTop - yMax >= 2, `${w}: нижняя часть текста должна быть выше линии минимум на 2 pt (отступ ${(lineTop - yMax).toFixed(1)})`);
+  const words = wordsOf(file);
+  const find = (t: string) => words.find(w => w.text === t)!;
+  for (const [value, label] of [["Audi", "Марка"], ["2019", "Год"], ["200000", "Пробег"]] as const) {
+    assert.ok(find(value).yMin > find(label).yMax, `${value} не налезает на подпись «${label}»`);
   }
-  const label = word("Марка");
-  assert.ok(word("Audi").yMin > label.yMax, "значение не налезает на подпись поля");
   assert.equal(DRIVESET_ORDER_COORDINATES.carImage.x, 283);
   assert.equal(DRIVESET_ORDER_COORDINATES.carImage.width, 282);
 });
@@ -199,23 +181,26 @@ test("БД получает display_number: миграция идемпотен�
   second.close();
 });
 
-test("автомобиль крупнее на 15–20%, пропорции сохранены, ничего не перекрывает", async () => {
+test("автомобиль ещё крупнее на 15–20%, пропорции сохранены, ничего не перекрывает", async () => {
   const box = DRIVESET_ORDER_COORDINATES.carImage;
-  const OLD_HEIGHT = 116;
-  const growth = box.height / OLD_HEIGHT - 1;
+  const PREVIOUS = { x: 283, y: 570.5, width: 282, height: 137 }; // область до этой правки
+  const growth = box.height / PREVIOUS.height - 1;
   assert.ok(growth >= 0.15 && growth <= 0.2, `рост ${(growth * 100).toFixed(1)}%`);
-  // Для типичного кадра 3:2 вписывание идёт по высоте, значит и размер растёт на тот же процент без деформации.
+  assert.equal(box.x, PREVIOUS.x);
+  assert.equal(box.width, PREVIOUS.width);
+  assert.equal(box.y + box.height / 2, PREVIOUS.y + PREVIOUS.height / 2, "центр области прежний");
+  // Для кадра 3:2 вписывание идёт по высоте: снимок растёт на тот же процент, без искажения и обрезки.
   const scale = Math.min(box.width / 1536, box.height / 1024);
   assert.ok(Math.abs((1536 * scale) / (1024 * scale) - 1.5) < 1e-9, "пропорции 3:2 сохраняются");
-  assert.ok(1536 * scale <= box.width, "по ширине вписывается в бокс");
-  // Низ бокса выше блока «ДАННЫЕ АВТОМОБИЛЯ» / полей (метки до y≈548), верх ниже строк контактов шапки (≈735).
-  assert.ok(box.y >= 560, `низ бокса ${box.y}`);
-  assert.ok(box.y + box.height <= 725, `верх бокса ${box.y + box.height}`);
-  // Слева заголовок «ЗАКАЗ-НАРЯД» заканчивается на x≈250.6, справа поля страницы — на x=565.
-  assert.ok(box.x > 251 && box.x + box.width <= 565);
+  assert.ok(1536 * scale <= box.width && 1024 * scale <= box.height, "кадр целиком в области");
+  // Низ области выше блока «ДАННЫЕ АВТОМОБИЛЯ» / подписей полей (≈544), верх ниже строк контактов шапки (≈736).
+  assert.ok(box.y >= 550, `низ области ${box.y}`);
+  assert.ok(box.y + box.height <= 725, `верх области ${box.y + box.height}`);
+  // Слева заголовок «ЗАКАЗ-НАРЯД» (Montserrat Bold) заканчивается на x≈241, справа поля страницы — на x=565.
+  assert.ok(box.x > 245 && box.x + box.width <= 565);
 });
 
-test("марка/модель и год — bold (DejaVu Sans Bold), пробег — regular", { skip: !HAS_PDFTOTEXT }, async () => {
+test("марка/модель, год и пробег — Montserrat SemiBold (600), а не Regular", { skip: !HAS_PDFTOTEXT }, async () => {
   const car = await sharp({ create: { width: 600, height: 300, channels: 3, background: "#fff" } }).png().toBuffer();
   const bytes = await generateDriveSetOrderPdf({
     orderNumber: "114", date: new Date("2026-10-03T12:00:00Z"), makeModel: "Geely Monjaro", year: 2022, mileage: "46 000 км",
@@ -231,13 +216,13 @@ test("марка/модель и год — bold (DejaVu Sans Bold), пробе�
   };
   const pdf = await PDFDocument.create();
   pdf.registerFontkit(fontkit);
-  const regular = await pdf.embedFont(fs.readFileSync("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"));
-  const bold = await pdf.embedFont(fs.readFileSync("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"));
+  const regular = await pdf.embedFont(fs.readFileSync("assets/fonts/montserrat/Montserrat_400Regular.ttf"));
+  const semibold = await pdf.embedFont(fs.readFileSync("assets/fonts/montserrat/Montserrat_600SemiBold.ttf"));
   const size = DRIVESET_ORDER_COORDINATES.makeModel.size;
-  for (const [word, font, other] of [["Geely", bold, regular], ["Monjaro", bold, regular], ["2022", bold, regular], ["км", regular, bold]] as const) {
+  for (const [word, font, other] of [["Geely", semibold, regular], ["Monjaro", semibold, regular], ["2022", semibold, regular], ["км", semibold, regular]] as const) {
     const measured = widthOf(word);
     assert.ok(Math.abs(measured - font.widthOfTextAtSize(word, size)) < 0.35, `${word}: ожидалась ширина ${font.widthOfTextAtSize(word, size).toFixed(2)}, получено ${measured.toFixed(2)}`);
-    assert.ok(Math.abs(measured - other.widthOfTextAtSize(word, size)) > 0.4, `${word}: ширина не должна совпадать с другим начертанием`);
+    assert.ok(Math.abs(measured - other.widthOfTextAtSize(word, size)) > 0.15, `${word}: ширина не должна совпадать с другим начертанием`);
   }
 });
 
@@ -295,7 +280,7 @@ test("номера услуг — по центру колонки «№», це
   ];
   assert.equal(rights.length, 4, "три цены и «В подарок»");
   for (const right of rights) assert.ok(Math.abs(right - header.xMax) < 0.8, `правый край ${right.toFixed(2)} ≠ заголовок ${header.xMax.toFixed(2)}`);
-  assert.equal(DRIVESET_ORDER_COORDINATES.serviceCost.right, 551);
+  assert.equal(DRIVESET_ORDER_COORDINATES.serviceCost.right, 553);
   assert.equal(DRIVESET_ORDER_COORDINATES.serviceNumber.center, 51);
 });
 
@@ -324,5 +309,57 @@ test("иконка телефона: одна, золотая, тонкая, н�
   assert.ok(text.includes("+7 901 344-77-33") && !text.includes("☎"), "номер текстом, без юникод-символа телефона");
   const address = wordsOf(file).find(w => w.text === "Москва,")!;
   const phoneText = wordsOf(file).find(w => w.text === "+7")!;
-  assert.equal(phoneText.xMin, address.xMin, "текст телефона начинается на том же x, что адрес");
+  assert.ok(Math.abs(phoneText.xMin - address.xMin) < 1.5, "текст телефона начинается на том же x (±боковой зазор глифов), что адрес");
+});
+
+const pdffonts = (file: string) => execFileSync("pdffonts", [file], { encoding: "utf8" });
+const HAS_PDFFONTS = spawnSync("pdffonts", ["-v"]).status !== null;
+
+test("Montserrat и в статическом шаблоне, и в динамическом тексте; DejaVu больше не используется", { skip: !HAS_PDFFONTS || !HAS_PDFTOTEXT }, async () => {
+  const template = pdffonts(path.join(process.cwd(), "templates", "driveset-order-montserrat.pdf"));
+  for (const name of ["Montserrat-Regular", "Montserrat-SemiBold", "Montserrat-Bold", "Montserrat-ExtraBold"]) {
+    assert.ok(template.includes(name), `шаблон: ${name}`);
+  }
+  assert.ok(!/DejaVu/i.test(template), "в шаблоне нет DejaVu");
+  const order = pdffonts(await renderSample());
+  for (const name of ["Montserrat-Regular", "Montserrat-Medium", "Montserrat-SemiBold", "Montserrat-Bold", "Montserrat-ExtraBold"]) {
+    assert.ok(order.includes(name), `готовый заказ-наряд: ${name}`);
+  }
+  assert.ok(!/DejaVu/i.test(order), "в заказ-наряде нет DejaVu");
+});
+
+test("подчёркивания под номером, датой, маркой/моделью, годом и пробегом убраны; остальные линии на месте", { skip: !HAS_PDFTOTEXT }, async () => {
+  // Растр самого шаблона (300 dpi): проверяем, что видно на листе.
+  const prefix = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "driveset-tpl-")), "tpl");
+  execFileSync("pdftoppm", ["-r", "300", "-png", "-singlefile", path.join(process.cwd(), "templates", "driveset-order-montserrat.pdf"), prefix]);
+  const { data, info } = await sharp(`${prefix}.png`).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const k = 300 / 72;
+  const ink = (box: { x: number; y: number; width: number; height: number }) => {
+    let n = 0, total = 0;
+    for (let y = Math.floor((841.8898 - box.y - box.height) * k); y < Math.ceil((841.8898 - box.y) * k); y++)
+      for (let x = Math.floor(box.x * k); x < Math.ceil((box.x + box.width) * k); x++) {
+        const i = (y * info.width + x) * 3;
+        total++;
+        if (data[i] < 240 || data[i + 1] < 240 || data[i + 2] < 240) n++;
+      }
+    return n / total;
+  };
+  // Прежние подчёркивания (y в pt от низа страницы): номер 643.9, дата 623.9, марка/год/пробег 519.9.
+  const removed: [string, { x: number; y: number; width: number; height: number }][] = [
+    ["номер", { x: 52, y: 643, width: 150, height: 1.8 }],
+    ["дата", { x: 64, y: 623, width: 140, height: 1.8 }],
+    ["марка и модель", { x: 45, y: 519, width: 110, height: 1.8 }],
+    ["год выпуска", { x: 196, y: 519, width: 76, height: 1.8 }],
+    ["пробег", { x: 314, y: 519, width: 128, height: 1.8 }],
+  ];
+  for (const [name, box] of removed) assert.ok(ink(box) < 0.002, `подчёркивание под «${name}» убрано`);
+  const kept: [string, { x: number; y: number; width: number; height: number }][] = [
+    ["вертикальный разделитель перед «Год выпуска»", { x: 179.4, y: 520, width: 1.2, height: 24 }],
+    ["вертикальный разделитель перед «Пробег»", { x: 297.4, y: 520, width: 1.2, height: 24 }],
+    ["золотая линия под «ДАННЫЕ АВТОМОБИЛЯ»", { x: 32, y: 557.3, width: 24, height: 1.2 }],
+    ["линия таблицы", { x: 80, y: 477.3, width: 300, height: 1.2 }],
+    ["линия подписи «Заказчик»", { x: 40, y: 33.5, width: 120, height: 1 }],
+    ["линия подписи «Исполнитель»", { x: 340, y: 33.5, width: 120, height: 1 }],
+  ];
+  for (const [name, box] of kept) assert.ok(ink(box) > 0.3, `${name} на месте`);
 });
