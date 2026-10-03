@@ -6,7 +6,7 @@ import { calculateDriveSetOrderTotals, type DriveSetService } from "../services/
 import { CarImageGenerationError } from "./car-images.js";
 import { DriveSetDocumentService, type DriveSetDraft } from "./documents.js";
 
-type Step = "idle" | "makeModel" | "year" | "mileage" | "serviceName" | "servicePrice" | "discount" | "preview";
+type Step = "idle" | "orderNumber" | "makeModel" | "year" | "mileage" | "serviceName" | "servicePrice" | "discount" | "preview";
 
 type Session = Partial<DriveSetDraft> & {
   step: Step;
@@ -74,10 +74,11 @@ function parseDiscount(text: string): number | null {
 }
 
 function draftFrom(session: Session): DriveSetDraft {
-  if (!session.makeModel || !session.vehicleYear || !session.mileage || !session.services?.length) {
+  if (!session.displayNumber || !session.makeModel || !session.vehicleYear || !session.mileage || !session.services?.length) {
     throw new Error("Черновик заказ-наряда заполнен не полностью");
   }
   return {
+    displayNumber: session.displayNumber,
     makeModel: session.makeModel,
     vehicleYear: session.vehicleYear,
     mileage: session.mileage,
@@ -94,6 +95,7 @@ function previewText(draft: DriveSetDraft): string {
   return [
     "Предпросмотр заказ-наряда",
     "",
+    `Номер заказ-наряда: № ${draft.displayNumber}`,
     `Автомобиль: ${draft.makeModel}`,
     `Год: ${draft.vehicleYear}`,
     `Пробег: ${draft.mileage}`,
@@ -136,14 +138,14 @@ export function createDriveSetBot(
       return;
     }
     const keyboard = new InlineKeyboard();
-    history.forEach(item => keyboard.text(`${item.orderNumber} · ${item.makeModel}`, `ds:history:${item.id}`).row());
+    history.forEach(item => keyboard.text(`${item.displayNumber ?? item.orderNumber} · ${item.makeModel}`, `ds:history:${item.id}`).row());
     await ctx.reply("Последние заказ-наряды:", { reply_markup: keyboard });
   });
 
   bot.callbackQuery("ds:type:order", async ctx => {
-    sessions.set(ctx.from.id, { step: "makeModel", services: [] });
+    sessions.set(ctx.from.id, { step: "orderNumber", services: [] });
     await ctx.answerCallbackQuery();
-    await ctx.reply("Введите марку и модель автомобиля:");
+    await ctx.reply("Введите номер заказ-наряда");
   });
 
   bot.callbackQuery("ds:price:gift", async ctx => {
@@ -218,7 +220,7 @@ export function createDriveSetBot(
       const result = await documents.generate(documentId, withImage);
       if (!result.pdfPath || !fs.existsSync(result.pdfPath)) throw new Error("Готовый PDF не найден");
       await ctx.replyWithDocument(new InputFile(result.pdfPath, `${result.orderNumber}.pdf`), {
-        caption: `${result.orderNumber} · ${result.makeModel} ${result.vehicleYear}`,
+        caption: `${result.displayNumber ?? result.orderNumber} · ${result.makeModel} ${result.vehicleYear}`,
       });
       sessions.set(ctx.from.id, { step: "idle" });
       await ctx.reply("Документ готов.", { reply_markup: mainKeyboard() });
@@ -258,6 +260,16 @@ export function createDriveSetBot(
     const text = ctx.message.text.trim();
     if (!text) return;
 
+    if (session.step === "orderNumber") {
+      if (text.length > 30) {
+        await ctx.reply("Номер заказ-наряда слишком длинный (не более 30 символов).");
+        return;
+      }
+      session.displayNumber = text;
+      session.step = "makeModel";
+      await ctx.reply("Введите марку и модель автомобиля:");
+      return;
+    }
     if (session.step === "makeModel") {
       session.makeModel = text;
       session.step = "year";

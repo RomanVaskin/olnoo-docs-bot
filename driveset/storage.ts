@@ -9,7 +9,10 @@ export type DriveSetDocumentStatus = "pending" | "generated" | "failed";
 
 export type DriveSetDocument = {
   id: number;
+  /** Внутренний номер (DS-YYYY-NNNN): ID, имя PDF-файла, история. */
   orderNumber: string;
+  /** Номер заказ-наряда, введённый пользователем; печатается в PDF как есть. */
+  displayNumber: string | null;
   sequenceYear: number;
   sequence: number;
   telegramUserId: string;
@@ -34,6 +37,7 @@ export type DriveSetDocument = {
 type DocumentRow = {
   id: number;
   order_number: string;
+  display_number: string | null;
   sequence_year: number;
   sequence: number;
   telegram_user_id: string;
@@ -58,6 +62,7 @@ type DocumentRow = {
 };
 
 export type ReserveDocumentInput = {
+  displayNumber: string;
   telegramUserId: string;
   telegramChatId: string;
   telegramUsername: string | null;
@@ -75,6 +80,7 @@ function mapRow(row: DocumentRow): DriveSetDocument {
   return {
     id: row.id,
     orderNumber: row.order_number,
+    displayNumber: row.display_number,
     sequenceYear: row.sequence_year,
     sequence: row.sequence,
     telegramUserId: row.telegram_user_id,
@@ -150,6 +156,12 @@ export class DriveSetStorage {
       CREATE INDEX IF NOT EXISTS driveset_documents_user_history
       ON driveset_documents (telegram_user_id, created_at DESC);
     `);
+
+    // Номер, введённый пользователем. Добавляется к уже существующей БД без потери данных.
+    const columns = this.database.prepare("PRAGMA table_info(driveset_documents)").all() as { name: string }[];
+    if (!columns.some(column => column.name === "display_number")) {
+      this.database.exec("ALTER TABLE driveset_documents ADD COLUMN display_number TEXT");
+    }
   }
 
   reserveDocument(input: ReserveDocumentInput): DriveSetDocument {
@@ -170,13 +182,14 @@ export class DriveSetStorage {
       const createdAt = (input.now ?? new Date()).toISOString();
       const result = this.database.prepare(`
         INSERT INTO driveset_documents (
-          order_number, sequence_year, sequence,
+          order_number, display_number, sequence_year, sequence,
           telegram_user_id, telegram_chat_id, telegram_username, telegram_name,
           make_model, vehicle_year, mileage, services_json, discount_percent,
           paid_works_cost, discount_amount, total, status, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
       `).run(
         orderNumber,
+        input.displayNumber,
         sequenceYear,
         sequence,
         input.telegramUserId,

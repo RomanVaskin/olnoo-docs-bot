@@ -12,13 +12,18 @@ const BOLD_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
 
 const MAX_SERVICE_ROWS = 7;
 
+const DRIVESET_PHONE = "+7 985 125-75-85";
+
 const COORDINATES = {
   orderNumber: { x: 48, y: 645, width: 160, size: 10 },
   date: { x: 60, y: 625, width: 148, size: 9 },
   carImage: { x: 283, y: 581, width: 282, height: 116 },
-  makeModel: { x: 41, y: 518, width: 135, size: 8.5 },
-  year: { x: 192, y: 518, width: 84, size: 8.5 },
-  mileage: { x: 310, y: 518, width: 136, size: 8.5 },
+  // Значения подняты над линиями полей (линия на y≈520.5), подписи и линии шаблона не двигаются.
+  makeModel: { x: 41, y: 525.5, width: 135, size: 8.5 },
+  year: { x: 192, y: 525.5, width: 84, size: 8.5 },
+  mileage: { x: 310, y: 525.5, width: 136, size: 8.5 },
+  // Третья строка контактов шапки: тот же x и кегль, что у адреса и @driveset, шаг строк 23 pt.
+  phone: { x: 364, y: 739.9, width: 192, size: 9.5 },
   serviceRows: [
     460.5,
     427.5,
@@ -32,7 +37,9 @@ const COORDINATES = {
   serviceName: { x: 82, width: 365, size: 8.5 },
   serviceCost: { x: 457, width: 94, size: 8.5 },
   paidWorksCost: { right: 550, y: 213, size: 9 },
-  discountPercent: { x: 56, y: 191, width: 45, size: 8 },
+  // «Скидка» уже в шаблоне; шаблонное «(%)» (x 82–95) закрывается белым и вместо него печатается «15%».
+  discountPercent: { x: 84, y: 191, width: 60, size: 10 },
+  discountPercentCover: { x: 81, y: 189, width: 17, height: 11 },
   discountAmount: { right: 550, y: 191, size: 9 },
   total: { right: 550, y: 147, size: 14 },
 } as const;
@@ -209,6 +216,7 @@ export async function generateDriveSetOrderPdf(data: DriveSetOrderData): Promise
 
   drawTextFit(page, data.orderNumber.trim(), boldFont, COORDINATES.orderNumber);
   drawTextFit(page, formatDate(data.date), regularFont, COORDINATES.date);
+  drawTextFit(page, DRIVESET_PHONE, regularFont, COORDINATES.phone);
   await drawCarImage(page, pdf, data.carImage);
   drawTextFit(page, data.makeModel.trim(), regularFont, COORDINATES.makeModel);
   drawTextFit(page, String(data.year).trim(), regularFont, COORDINATES.year);
@@ -227,8 +235,15 @@ export async function generateDriveSetOrderPdf(data: DriveSetOrderData): Promise
   });
 
   drawTextRight(page, formatAmount(totals.paidWorksCost), boldFont, COORDINATES.paidWorksCost);
+  const cover = COORDINATES.discountPercentCover;
+  page.drawRectangle({ x: cover.x, y: cover.y, width: cover.width, height: cover.height, color: rgb(1, 1, 1) });
   drawTextFit(page, `${totals.discountPercent}%`, regularFont, COORDINATES.discountPercent);
-  drawTextRight(page, `− ${formatAmount(totals.discountAmount)}`, boldFont, COORDINATES.discountAmount);
+  drawTextRight(
+    page,
+    totals.discountAmount > 0 ? `− ${formatAmount(totals.discountAmount)}` : formatAmount(0),
+    boldFont,
+    COORDINATES.discountAmount,
+  );
   drawTextRight(page, formatAmount(totals.total), boldFont, COORDINATES.total);
 
   // Старые просмотрщики и установленный в проекте Ghostscript надёжнее

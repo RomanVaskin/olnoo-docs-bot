@@ -10,6 +10,8 @@ import { DriveSetCarImageService, transparentCarImage } from "./car-images.js";
 import { DriveSetStorage, type DriveSetDocument } from "./storage.js";
 
 export type DriveSetDraft = {
+  /** Номер заказ-наряда, введённый пользователем. */
+  displayNumber: string;
   makeModel: string;
   vehicleYear: number;
   mileage: string;
@@ -39,6 +41,7 @@ export class DriveSetDocumentService {
       telegramChatId: user.chatId,
       telegramUsername: user.username,
       telegramName: user.name,
+      displayNumber: draft.displayNumber,
       makeModel: draft.makeModel,
       vehicleYear: draft.vehicleYear,
       mileage: draft.mileage,
@@ -57,7 +60,8 @@ export class DriveSetDocumentService {
         ? (image = await this.images.getOrGenerate(document.makeModel, document.vehicleYear)).bytes
         : await transparentCarImage();
       const pdfBytes = await generateDriveSetOrderPdf({
-        orderNumber: document.orderNumber,
+        // В PDF печатается номер, введённый пользователем (у старых документов — внутренний).
+        orderNumber: document.displayNumber ?? document.orderNumber,
         date: new Date(document.createdAt),
         makeModel: document.makeModel,
         year: document.vehicleYear,
