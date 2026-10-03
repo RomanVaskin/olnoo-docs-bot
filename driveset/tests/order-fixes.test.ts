@@ -240,3 +240,89 @@ test("марка/модель и год — bold (DejaVu Sans Bold), пробе�
     assert.ok(Math.abs(measured - other.widthOfTextAtSize(word, size)) > 0.4, `${word}: ширина не должна совпадать с другим начертанием`);
   }
 });
+
+async function renderSample(): Promise<string> {
+  const car = await sharp({ create: { width: 600, height: 400, channels: 3, background: "#fff" } }).png().toBuffer();
+  const bytes = await generateDriveSetOrderPdf({
+    orderNumber: "1122", date: new Date("2026-10-03T12:00:00Z"), makeModel: "Geely Monjaro", year: 2022, mileage: "46 000 км",
+    carImage: car,
+    services: [
+      { name: "Оклейка", price: 120000 },
+      { name: "Полировка", price: 10000 },
+      { name: "Химчистка", gift: true },
+      { name: "Крупная работа", price: 1250000 },
+    ],
+    discountPercent: 0,
+  });
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "driveset-align-")), "order.pdf");
+  fs.writeFileSync(file, bytes);
+  return file;
+}
+
+type Word = { text: string; xMin: number; yMin: number; xMax: number; yMax: number };
+function wordsOf(file: string): Word[] {
+  const bbox = execFileSync("pdftotext", ["-bbox", file, "-"], { encoding: "utf8" });
+  return [...bbox.matchAll(/xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">([^<]*)<\/word>/g)].map(m => ({
+    xMin: Number(m[1]), yMin: Number(m[2]), xMax: Number(m[3]), yMax: Number(m[4]), text: m[5],
+  }));
+}
+
+test("номер заказ-наряда сдвинут вправо от «№» шаблона: нормальный промежуток, правый край поля не изменился", { skip: !HAS_PDFTOTEXT }, async () => {
+  const words = wordsOf(await renderSample());
+  const sign = words.find(w => w.text === "№" && w.yMin < 200)!; // «№» шаблона у заголовка
+  const number = words.find(w => w.text === "1122")!;
+  const gap = number.xMin - sign.xMax;
+  assert.ok(gap >= 6 && gap <= 14, `промежуток между «№» и номером ${gap.toFixed(1)} pt`);
+  const c = DRIVESET_ORDER_COORDINATES.orderNumber;
+  assert.equal(c.x, 54, "было 48");
+  assert.equal(c.x + c.width, 208, "правый край (конец линии поля) прежний");
+  assert.equal(c.y, 645);
+  assert.equal(c.size, 10);
+});
+
+test("номера услуг — по центру колонки «№», цены и «В подарок» — по правому краю колонки «СТОИМОСТЬ»", { skip: !HAS_PDFTOTEXT }, async () => {
+  const words = wordsOf(await renderSample());
+  const COLUMN_CENTER = (29 + 73) / 2; // колонка «№»: от x=29 до линии x=73
+  for (const n of ["1", "2", "3", "4"]) {
+    const w = words.find(x => x.text === n && x.xMin > 40 && x.xMax < 62 && x.yMin > 250)!;
+    assert.ok(w, `номер ${n} найден`);
+    assert.ok(Math.abs((w.xMin + w.xMax) / 2 - COLUMN_CENTER) < 0.7, `${n}: центр ${((w.xMin + w.xMax) / 2).toFixed(2)} вместо ${COLUMN_CENTER}`);
+  }
+  const header = words.find(w => w.text === "СТОИМОСТЬ")!;
+  const rights = [
+    ...words.filter(w => w.text === "₽" && w.xMin > 500 && w.yMin > 250 && w.yMin < 500).map(w => w.xMax),
+    words.find(w => w.text === "подарок")!.xMax,
+  ];
+  assert.equal(rights.length, 4, "три цены и «В подарок»");
+  for (const right of rights) assert.ok(Math.abs(right - header.xMax) < 0.8, `правый край ${right.toFixed(2)} ≠ заголовок ${header.xMax.toFixed(2)}`);
+  assert.equal(DRIVESET_ORDER_COORDINATES.serviceCost.right, 551);
+  assert.equal(DRIVESET_ORDER_COORDINATES.serviceNumber.center, 51);
+});
+
+test("иконка телефона: одна, золотая, тонкая, на оси иконок шапки и того же размера, что Telegram; Telegram не дублируется", { skip: !HAS_PDFTOTEXT }, async () => {
+  const file = await renderSample();
+  const prefix = file.replace(/\.pdf$/, "");
+  execFileSync("pdftoppm", ["-r", "300", "-png", "-singlefile", file, prefix]);
+  const { data, info } = await sharp(`${prefix}.png`).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const k = 300 / 72;
+  const gold = (i: number) => data[i] > 170 && data[i + 1] > 100 && data[i + 1] < 170 && data[i + 2] < 90;
+  const bounds = (yFromPt: number, yToPt: number) => {
+    let x0 = 1e9, x1 = -1, y0 = 1e9, y1 = -1, count = 0;
+    for (let y = Math.floor((841.8898 - yToPt) * k); y < Math.ceil((841.8898 - yFromPt) * k); y++)
+      for (let x = Math.floor(340 * k); x < Math.ceil(362 * k); x++)
+        if (gold((y * info.width + x) * 3)) { count++; x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    return { count, cx: (x0 + x1) / 2 / k, w: (x1 - x0) / k, h: (y1 - y0) / k, cy: 841.8898 - (y0 + y1) / 2 / k };
+  };
+  const telegram = bounds(757, 775); // иконка из шаблона
+  const phone = bounds(733, 751); // добавленная иконка
+  assert.ok(telegram.count > 200 && phone.count > 200, "обе иконки золотые");
+  assert.ok(Math.abs(phone.cx - telegram.cx) < 1, `ось x: телефон ${phone.cx.toFixed(2)}, Telegram ${telegram.cx.toFixed(2)}`);
+  assert.ok(Math.abs(phone.w - telegram.w) < 1.5 && Math.abs(phone.h - telegram.h) < 1.5, `размер ${phone.w.toFixed(1)}×${phone.h.toFixed(1)} vs ${telegram.w.toFixed(1)}×${telegram.h.toFixed(1)}`);
+  assert.equal(bounds(751.5, 756.5).count, 0, "между иконками нет второй Telegram-иконки");
+  assert.ok(phone.count < telegram.count * 1.6, "линия тонкая, как у иконок шаблона");
+  const text = pdfText(file);
+  assert.ok(text.includes("+7 901 344-77-33") && !text.includes("☎"), "номер текстом, без юникод-символа телефона");
+  const address = wordsOf(file).find(w => w.text === "Москва,")!;
+  const phoneText = wordsOf(file).find(w => w.text === "+7")!;
+  assert.equal(phoneText.xMin, address.xMin, "текст телефона начинается на том же x, что адрес");
+});
